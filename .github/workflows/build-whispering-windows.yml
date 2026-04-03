@@ -1,0 +1,65 @@
+name: Build Whispering Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./apps/whispering/src-tauri -> target
+
+      - name: Install JS dependencies
+        run: bun install
+
+      - name: Build frontend
+        run: bun --filter @epicenter/whispering build
+
+      - name: Build Windows app
+        working-directory: apps/whispering
+        run: bun tauri build
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          Get-ChildItem -Path "apps/whispering/src-tauri/target/release/bundle" -Recurse -File |
+            Where-Object {
+              $_.Extension -in ".exe", ".msi", ".zip", ".sig" -or $_.Name -like "*setup*"
+            } |
+            Copy-Item -Destination dist -Force
+
+          @"
+          Repo: ${{ github.repository }}
+          Commit: ${{ github.sha }}
+          Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BuiltAt: $(Get-Date -Format o)
+          "@ | Set-Content -Path dist/BUILD-INFO.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whispering-windows-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
